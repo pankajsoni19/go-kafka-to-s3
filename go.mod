@@ -9,7 +9,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.1.0
 	github.com/aws/smithy-go v1.1.0
 	github.com/confluentinc/confluent-kafka-go v1.5.2
-	github.com/phuslu/log v1.0.60
+	github.com/phuslu/log v1.0.62
 	github.com/pkg/errors v0.9.1
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/spf13/viper v1.7.1
