@@ -1,131 +1,242 @@
 package main
 
 import (
-	"flag"
+	"context"
+	"fmt"
 	"os"
-	"strconv"
+	"path/filepath"
 	"time"
 
-	log "github.com/sirupsen/logrus"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	"github.com/aws/smithy-go/logging"
+	"github.com/phuslu/log"
+	"github.com/pkg/errors"
+	"github.com/robfig/cron/v3"
 
-	"github.com/apanagiotou/go-kafka-to-s3/file"
-	"github.com/apanagiotou/go-kafka-to-s3/kafka"
-	"github.com/apanagiotou/go-kafka-to-s3/s3"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/s3/s3manager"
+	"github.com/confluentinc/confluent-kafka-go/kafka"
 )
 
-var (
-	kafkaBrokers       = flag.String("kafkaBrokers", getEnv("BOOTSTRAP_SERVERS", ""), "The comma separated list of brokers in the Kafka cluster")
-	kafkaTopic         = flag.String("kafkaTopic", getEnv("KAFKA_TOPIC", ""), "REQUIRED: the topic to consume")
-	kafkaConsumerGroup = flag.String("kafkaConsumerGroup", "go-kafka-to-s3", "The consumer group name")
-	offset             = flag.String("offset", "latest", "The offset to start with. Can be `oldest`, `newest`")
-	bufferSize         = flag.Int("bufferSize", 1000, "The buffer size of the message channel.")
-	s3Bucket           = flag.String("s3Bucket", getEnv("S3_BUCKET", ""), "The S3 bucket to upload the files.")
-	s3BucketPath       = flag.String("s3BucketPath", getEnv("S3_BUCKET_SUBPATH", "/"), "The S3 bucket to upload the files.")
-	s3Region           = flag.String("s3Region", getEnv("S3_REGION", ""), "The S3 region of the bucket.")
-	fileRotateSizeStr  = flag.String("fileRotateSizeStr", getEnv("FILE_SIZE_THRESHOLD_MB", "10"), "The threshold to rotate the files and upload them.")
-)
+//S3Client handle
+var s3Client *s3.Client
+var logWriter *log.FileWriter
 
 func main() {
-	flag.Parse()
+	config, err := loadConfig()
+
+	if err != nil {
+		panic(err)
+	}
+
+	setupLogger(config)
+	setupAWS(config)
+
+	topics := make([]string, len(config.Kafka.Topics))
+
+	consumer, err := kafka.NewConsumer(&kafka.ConfigMap{
+		"bootstrap.servers": config.Kafka.Bootstrap,
+		"group.id":          config.Kafka.ConsumerGroup,
+		"auto.offset.reset": "latest",
+	})
+
+	if err != nil {
+		panic(err)
+	}
+
+	err = consumer.SubscribeTopics(topics, nil)
+
+	if err != nil {
+		consumer.Close()
+		panic(err)
+	}
+
+	channels := make(map[string]chan string, len(config.Kafka.Topics))
+
+	for _, topic := range config.Kafka.Topics {
+		channels[topic] = setupRotation(consumer, config, topic)
+	}
+
+	for {
+		// ReadMessage automatically commits offsets when using consumer groups.
+		timeoutDuration := 5 * time.Second
+		msg, err := consumer.ReadMessage(timeoutDuration)
+
+		if err != nil {
+			log.Error().Err(err).Msg("Consumer error..")
+		} else {
+			if channel, ok := channels[*msg.TopicPartition.Topic]; ok {
+				channel <- string(msg.Value)
+			} else {
+				log.Error().Msgf("Ignoring kafka message: %s", string(msg.Value))
+			}
+		}
+	}
+
+	// kafkaConsumer.Close()
+}
+
+func setupLogger(config *Config) {
+	logWriter := &log.FileWriter{
+		Filename:   fmt.Sprintf("%s/%s.log", config.Logger.FilePath, config.Logger.Level),
+		FileMode:   0600,
+		MaxSize:    config.Logger.FileSize,
+		MaxBackups: config.Logger.Backups,
+		// Cleaner: func(filename string, maxBackups int, matches []os.FileInfo) {
+		//      var dir = filepath.Dir(filename)
+		//      var total int64
+		//      for i := len(matches) - 1; i >= 0; i-- {
+		//              total += matches[i].Size()
+		//              if total > 10*1024*1024*1024 {
+		//                      os.Remove(filepath.Join(dir, matches[i].Name()))
+		//              }
+		//      }
+		// },
+		EnsureFolder: true,
+		LocalTime:    true,
+		HostName:     true,
+		ProcessID:    true,
+	}
+
+	log.DefaultLogger = log.Logger{
+		Level:  log.ParseLevel(config.Logger.Level),
+		Writer: logWriter,
+	}
+
+	//rotate every hour
+	runner := cron.New(cron.WithSeconds(), cron.WithLocation(time.UTC))
+	runner.AddFunc("0 0 * * * *", func() {
+		logWriter.Rotate()
+	})
+
+	go runner.Run()
+}
+
+func setupAWS(appConfig *Config) {
+	clientLogMode := aws.LogRetries | aws.LogRequest | aws.LogResponse
+
+	s3Cfg, err := config.LoadDefaultConfig(context.TODO(),
+		config.WithRegion(appConfig.AWSS3.Region),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(appConfig.AWSS3.AccessKey, appConfig.AWSS3.AccessSecret, "")),
+		config.WithLogConfigurationWarnings(true),
+		config.WithClientLogMode(clientLogMode),
+		config.WithLogger(logging.NewStandardLogger(logWriter)))
+
+	if err != nil {
+		fmt.Println("unable to load AWS S3 config", err)
+		panic((err))
+	}
+
+	s3Client = s3.NewFromConfig(s3Cfg)
+}
+
+func setupRotation(consumer *kafka.Consumer, config *Config, topic string) chan string {
 
 	// Get the size in Mebabytes from the env var and convert in int64 bytes
-	fileRotateSize, _ := strconv.Atoi(*fileRotateSizeStr)
-	fileRotateSizeInBytes := int64(fileRotateSize * 1024 * 1024)
+	fileRotateSizeInBytes := int64(config.File.FileSizeInMB * 1024 * 1024)
 
-	// Initialize kafka and file
-	kafkaConsumer := kafka.New(*kafkaBrokers, *kafkaTopic, *kafkaConsumerGroup, *offset)
-	positionFile, err := file.New(*kafkaTopic, fileRotateSizeInBytes)
-	if err != nil {
-		log.Fatal(err)
-	}
+	positionFile, err := fileWriter(topic, fileRotateSizeInBytes)
 
-	// Initialize S3 Uploader used to upload the rotated file to S3
-	sess, err := session.NewSession(&aws.Config{Region: aws.String(*s3Region)})
 	if err != nil {
-		log.Fatal(err)
+		panic(err)
 	}
-	s3Manager := s3manager.NewUploader(sess)
-	s3Uploader := s3.New(*s3Bucket, *s3BucketPath, s3Manager)
 
 	// This channel is used to store kafka messages
-	position := make(chan string, *bufferSize)
+	position := make(chan string, config.Kafka.BufferSize)
 
 	// Writes kafka messages to the file
 	go func() {
-		log.Debug("Write goroutine created")
+		log.Debug().Msgf("Write goroutine created for topic: %s", topic)
+
 		for pos := range position {
 			_, err := positionFile.Write(pos)
 			if err != nil {
-				log.Error(err)
+				log.Error().Err(err)
 			}
 		}
 	}()
 
 	// Rotate and upload the file to S3 if it has reached fileRotateSize
 	go func() {
-		log.Debug("Rotate/Upload goroutine created")
+		log.Debug().Msg("Rotate/Upload goroutine created")
+
 		for {
 			time.Sleep(5)
 			if rotate, err := positionFile.Rotateable(); rotate == true {
-				log.Debug("The file is rotatable")
+				log.Debug().Msg("The file is rotatable")
+
 				if err != nil {
-					log.Error(err)
+					log.Error().Err(err).Msg("file open")
 				}
+
 				rotatedFile, err := positionFile.Rotate()
-				log.Debugf("File rotated: %s", rotatedFile)
+
+				log.Debug().Msgf("File rotated: %s", rotatedFile)
+
 				if err != nil {
-					log.Error(err)
+					log.Error().Err(err).Msg("rotate")
 				}
+
 				go func() {
-					log.Debug("Compress/Upload routine started")
-					compressed, err := file.Compress(rotatedFile)
-					log.Debugf("File compressed: %s", compressed)
+					log.Debug().Msg("Compress/Upload routine started")
+
+					compressed, err := fileCompress(rotatedFile)
+					log.Debug().Msgf("File compressed: %s", compressed)
+
 					if err != nil {
-						log.Error(err)
+						log.Error().Err(err).Msg("compression")
 					}
-					err = s3Uploader.Upload(compressed)
-					if err != nil {
-						log.Error(err)
+
+					if err := upload(config, topic, compressed); err != nil {
+						log.Error().Err(err).Msg("upload error")
 					}
-					log.Debugf("File uploaded: %s", compressed)
-					err = os.Remove(compressed)
-					if err != nil {
-						log.Error(err)
+
+					log.Debug().Msgf("File uploaded: %s", compressed)
+
+					if err = os.Remove(compressed); err != nil {
+						log.Error().Err(err).Msg("error removing compressed file")
 					}
-					log.Debugf("Rotated file deleted: %s", compressed)
+
+					log.Debug().Msgf("Rotated file deleted: %s", compressed)
 				}()
 			}
 		}
 	}()
 
-	for {
-		// ReadMessage automatically commits offsets when using consumer groups.
-		msg, err := kafkaConsumer.Consume()
-
-		if err == nil {
-			position <- string(msg.Value)
-		} else {
-			log.Errorf("Consumer error: %v (%v)", err, msg)
-			break
-		}
-	}
-
-	kafkaConsumer.Close()
+	return position
 }
 
-// getEnv takes an env and a fallback value. If the env exists it returns it.
-// If not and there is a fallback it returns that,
-// Else, stops the program
-func getEnv(key, fallback string) string {
-	if value, ok := os.LookupEnv(key); ok {
-		return value
+// // Close closes the kafka connection
+// func (kc *kafka.Consumer) close() {
+// 	kc.Close()
+// }
+
+func upload(config *Config, topic string, filename string) error {
+
+	file, err := os.Open(filename)
+	if err != nil {
+		return errors.Wrap(err, "OS File Open")
 	}
-	if fallback != "" {
-		return fallback
+	defer file.Close()
+
+	awsFileKey := filepath.Join(config.AWSS3.Path, topic, filename)
+
+	log.Info().Msgf("Uploading %s to S3...", filename)
+
+	input := &s3.PutObjectInput{
+		Bucket: aws.String(config.AWSS3.Bucket),
+		Key:    aws.String(awsFileKey),
+		Body:   file,
+		ACL:    types.ObjectCannedACLPrivate,
 	}
-	log.Fatal(key + " is not set")
-	return ""
+
+	if _, err := s3Client.PutObject(context.TODO(), input); err != nil {
+		log.Error().Err(err).Msg("S3 upload")
+		return err
+	}
+
+	log.Info().Msgf("Successfully uploaded %s to %s", filename, awsFileKey)
+	return nil
 }

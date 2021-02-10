@@ -1,0 +1,11 @@
+[Unit]
+Description=Go sample web app
+After=multi-user.target
+
+[Service]
+User=admin
+Group=admin
+ExecStart=/home/admin/go-kafka-to-s3
+
+[Install]
+WantedBy=multi-user.target

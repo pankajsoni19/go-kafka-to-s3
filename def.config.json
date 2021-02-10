@@ -1,0 +1,26 @@
+{
+    "kafka": {
+        "bootstrap": "servers:9092,...",
+        "consumer_group": "go-kafka-to-s3",
+        "buffer_size": 1000,
+        "topics": [ 
+            "topic1"
+        ]
+    },
+    "s3": {
+        "path": "AWS_FILE_PATH",
+        "access_key": "AWS_ACCESS_KEY",
+        "access_secret": "AWS_ACCESS_SECRET",
+        "region": "AWS_REGION",
+        "bucket": "AWS_BUCKET"
+    },
+    "file": {
+        "size_mb": 10
+    },
+    "log": {
+        "level": "info",
+        "filePath": "/var/log/kafka2s3/logs",
+        "fileSize": 52428800,
+        "backups":10
+    }
+}
