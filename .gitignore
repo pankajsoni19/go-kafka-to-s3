@@ -1,4 +1,5 @@
 # Binaries for programs and plugins
+config.json
 temp
 logs/*.log
 *.exe
