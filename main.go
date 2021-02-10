@@ -34,6 +34,14 @@ func main() {
 	setupLogger(config)
 	setupAWS(config)
 
+	//setup channels
+	channels := make(map[string]chan string, len(config.Kafka.Topics))
+
+	for _, topic := range config.Kafka.Topics {
+		channels[topic] = setupRotation(config, topic)
+	}
+
+	// consume
 	topics := make([]string, len(config.Kafka.Topics))
 
 	consumer, err := kafka.NewConsumer(&kafka.ConfigMap{
@@ -53,12 +61,6 @@ func main() {
 		panic(err)
 	}
 
-	channels := make(map[string]chan string, len(config.Kafka.Topics))
-
-	for _, topic := range config.Kafka.Topics {
-		channels[topic] = setupRotation(consumer, config, topic)
-	}
-
 	for {
 		// ReadMessage automatically commits offsets when using consumer groups.
 		timeoutDuration := 5 * time.Second
@@ -74,8 +76,6 @@ func main() {
 			}
 		}
 	}
-
-	// kafkaConsumer.Close()
 }
 
 func setupLogger(config *Config) {
@@ -132,12 +132,14 @@ func setupAWS(appConfig *Config) {
 	s3Client = s3.NewFromConfig(s3Cfg)
 }
 
-func setupRotation(consumer *kafka.Consumer, config *Config, topic string) chan string {
+func setupRotation(config *Config, topic string) chan string {
 
 	// Get the size in Mebabytes from the env var and convert in int64 bytes
 	fileRotateSizeInBytes := int64(config.File.FileSizeInMB * 1024 * 1024)
 
-	positionFile, err := fileWriter(topic, fileRotateSizeInBytes)
+	filename := fmt.Sprintf("%s.log", topic)
+
+	positionFile, err := fileWriter(filename, fileRotateSizeInBytes)
 
 	if err != nil {
 		panic(err)
