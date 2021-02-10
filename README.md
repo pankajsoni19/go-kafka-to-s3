@@ -14,11 +14,10 @@ A step by step series of examples that tell you how to get a development env run
 git clone https://github.com/pankajsoni19/go-kafka-to-s3
 cd go-kafka-to-s3
 GOOS=linux GOARCH=amd64 go build
-```
 
-Setup config
-```
-cp def.config.json kafka2s3-config.json
+cp def.config.json config.json
+
+./go-kafka-to-s3
 ```
 
 Install As Systemd
@@ -28,7 +27,13 @@ systemctl start kafka2s3.service
 systemctl enable kafka2s3.service
 ```
 
+Config file locations
 
+```
+* /opt/go-kafka-to-s3
+* /etc/go-kafka-to-s3
+* $HOME/go-kafka-to-s3
+```
 
 ## Authors
 

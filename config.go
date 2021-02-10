@@ -43,13 +43,13 @@ type Config struct {
 }
 
 func loadConfig() (config *Config, err error) {
-	viper.SetConfigName("kafka2s3-config.json") // name of config file (without extension)
-	viper.SetConfigType("json")                 // REQUIRED if the config file does not have the extension in the name
+	viper.SetConfigName("config.json") // name of config file (without extension)
+	viper.SetConfigType("json")        // REQUIRED if the config file does not have the extension in the name
 
-	viper.AddConfigPath("/opt/kafka2s3/") // path to look for the config file in
-	viper.AddConfigPath("/etc/kafka2s3/")
-	viper.AddConfigPath("$HOME/kafka2s3/") // call multiple times to add many search paths
-	viper.AddConfigPath("../")             // optionally look for config in the working directory
+	viper.AddConfigPath("/opt/go-kafka-to-s3/") // path to look for the config file in
+	viper.AddConfigPath("/etc/go-kafka-to-s3/")
+	viper.AddConfigPath("$HOME/go-kafka-to-s3/") // call multiple times to add many search paths
+	viper.AddConfigPath("../")                   // optionally look for config in the working directory
 
 	err = viper.ReadInConfig()
 
