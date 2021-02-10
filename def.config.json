@@ -9,8 +9,8 @@
     },
     "s3": {
         "path": "AWS_FILE_PATH",
-        "access_key": "AWS_ACCESS_KEY",
-        "access_secret": "AWS_ACCESS_SECRET",
+        "accessKey": "AWS_ACCESS_KEY",
+        "accessSecret": "AWS_ACCESS_SECRET",
         "region": "AWS_REGION",
         "bucket": "AWS_BUCKET"
     },
