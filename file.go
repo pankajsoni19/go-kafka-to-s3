@@ -25,7 +25,7 @@ type RotateWriter struct {
 // New makes a new RotateWriter. Return nil if error occurs during setup.
 func fileWriter(filename string, maxsize int64) (w *RotateWriter, err error) {
 	w = &RotateWriter{filename: filename, maxsize: maxsize}
-	w.fp, err = os.OpenFile(filename, syscall.O_RDWR|syscall.O_CREAT, 0666)
+	w.fp, err = os.OpenFile(filename, syscall.O_RDWR|syscall.O_CREAT|syscall.O_APPEND, 0666)
 	if err != nil {
 		return nil, err
 	}
