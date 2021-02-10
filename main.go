@@ -37,12 +37,10 @@ func main() {
 	//setup channels
 	channels := make(map[string]chan string, len(config.Kafka.Topics))
 
+	// consume
 	for _, topic := range config.Kafka.Topics {
 		channels[topic] = setupRotation(config, topic)
 	}
-
-	// consume
-	topics := make([]string, len(config.Kafka.Topics))
 
 	consumer, err := kafka.NewConsumer(&kafka.ConfigMap{
 		"bootstrap.servers": config.Kafka.Bootstrap,
@@ -54,7 +52,7 @@ func main() {
 		panic(err)
 	}
 
-	err = consumer.SubscribeTopics(topics, nil)
+	err = consumer.SubscribeTopics(config.Kafka.Topics, nil)
 
 	if err != nil {
 		consumer.Close()
