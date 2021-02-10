@@ -61,8 +61,7 @@ func main() {
 
 	for {
 		// ReadMessage automatically commits offsets when using consumer groups.
-		timeoutDuration := 5 * time.Second
-		msg, err := consumer.ReadMessage(timeoutDuration)
+		msg, err := consumer.ReadMessage(-1)
 
 		if err != nil {
 			log.Error().Err(err).Msg("Consumer error..")
