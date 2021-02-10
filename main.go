@@ -77,7 +77,7 @@ func main() {
 }
 
 func setupLogger(config *Config) {
-	logWriter := &log.FileWriter{
+	logWriter = &log.FileWriter{
 		Filename:   fmt.Sprintf("%s/%s.log", config.Logger.FilePath, config.Logger.Level),
 		FileMode:   0600,
 		MaxSize:    config.Logger.FileSize,
